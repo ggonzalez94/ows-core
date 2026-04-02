@@ -302,10 +302,55 @@ describe('@open-wallet-standard/core', () => {
     deleteWallet(wallet.id, vaultDir);
   });
 
+  it('signs with an API key for a wallet imported from a private key', () => {
+    createPolicy(JSON.stringify({
+      id: 'test-imported-wallet',
+      name: 'Imported Wallet',
+      version: 1,
+      created_at: '2026-03-31T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['eip155:8453'] },
+      ],
+      action: 'deny',
+    }), vaultDir);
+    const wallet = importWalletPrivateKey(
+      'policy-imported-wallet',
+      'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+      '',
+      vaultDir,
+      'evm',
+    );
+    const key = createApiKey(
+      'imported-wallet-agent',
+      [wallet.id],
+      ['test-imported-wallet'],
+      '',
+      null,
+      vaultDir,
+    );
+
+    const msgSig = signMessage(
+      wallet.id,
+      'base',
+      'hello',
+      key.token,
+      undefined,
+      undefined,
+      vaultDir,
+    );
+    assert.ok(msgSig.signature.length > 0);
+
+    const txSig = signTransaction(wallet.id, 'base', 'deadbeef', key.token, null, vaultDir);
+    assert.ok(txSig.signature.length > 0);
+
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('test-imported-wallet', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
   it('signs EIP-712 typed data with an API key token', () => {
     const wallet = createWallet('typed-data-api', undefined, 12, vaultDir);
 
-    // Register a policy allowing Base chains
     createPolicy(JSON.stringify({
       id: 'td-base-only',
       name: 'Base Only',
@@ -317,11 +362,9 @@ describe('@open-wallet-standard/core', () => {
       action: 'deny',
     }), vaultDir);
 
-    // Create API key bound to the wallet and policy
     const key = createApiKey('td-agent', [wallet.id], ['td-base-only'], '', null, vaultDir);
     assert.ok(key.token.startsWith('ows_key_'));
 
-    // EIP-712 typed data (the standard "Mail" example)
     const typedDataJson = JSON.stringify({
       types: {
         EIP712Domain: [
@@ -354,14 +397,10 @@ describe('@open-wallet-standard/core', () => {
       },
     });
 
-    // Sign on allowed chain — should succeed
     const sig = signTypedData(wallet.id, 'base', typedDataJson, key.token, null, vaultDir);
     assert.ok(sig.signature.length > 0, 'signature should be non-empty');
     assert.ok(sig.recoveryId != null, 'recoveryId should be present for EIP-712');
 
-    // Sign on denied chain — should fail
-    // Build typed data with chainId=1 matching ethereum so the domain check passes
-    // and AllowedChains (base-only) correctly denies
     const ethTypedDataJson = JSON.stringify({
       ...JSON.parse(typedDataJson),
       domain: { ...JSON.parse(typedDataJson).domain, chainId: 1 },
@@ -371,7 +410,6 @@ describe('@open-wallet-standard/core', () => {
       (err) => err.message.includes('not in allowlist'),
     );
 
-    // Cleanup
     revokeApiKey(key.id, vaultDir);
     deletePolicy('td-base-only', vaultDir);
     deleteWallet(wallet.id, vaultDir);
